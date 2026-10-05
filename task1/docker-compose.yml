@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  postgres:
+    build: .
+    container_name: postgres_logs_db
+    environment:
+      POSTGRES_USER: ${USER}
+      POSTGRES_PASSWORD: ${PASSWORD}
+      POSTGRES_DB: ${DB}
+      SECRET_HASH: ${SECRET_HASH}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:    
+    name: ${VOLUME_NAME}
