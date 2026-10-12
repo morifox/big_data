@@ -1,0 +1,117 @@
+# Витрины успеваемости студентов (вариант 4): Apache Airflow + PostgreSQL
+#
+#   airflow-postgres  - служебная база Airflow (метаданные)
+#   students-db       - база с данными: схемы raw, stg, mart (порт на компьютере: STUDENTS_DB_PORT, по умолчанию 5435)
+#   airflow-init      - однократная инициализация Airflow и создание пользователя
+#   airflow-webserver - веб-интерфейс (http://localhost:8080)
+#   airflow-scheduler - планировщик, выполняет задачи DAG
+#
+# Запуск:  docker compose up -d --build
+
+x-airflow-common:
+  &airflow-common
+  build: .
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__SECRET_KEY: 'student_performance_mart'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # подключение скрипта витрины к базе students-db (внутри сети Docker)
+    DB_HOST: students-db
+    DB_PORT: 5432
+    DB_NAME: ${STUDENTS_DB_NAME:-students_db}
+    DB_USER: ${STUDENTS_DB_USER:-student}
+    DB_PASSWORD: ${STUDENTS_DB_PASSWORD:-student}
+    STUDENT_DATA_DIR: /opt/airflow/data
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./data:/opt/airflow/data
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    airflow-postgres:
+      condition: service_healthy
+    students-db:
+      condition: service_healthy
+
+services:
+  airflow-postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  students-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${STUDENTS_DB_USER:-student}
+      POSTGRES_PASSWORD: ${STUDENTS_DB_PASSWORD:-student}
+      POSTGRES_DB: ${STUDENTS_DB_NAME:-students_db}
+    volumes:
+      - students-db-volume:/var/lib/postgresql/data
+    ports:
+      - "${STUDENTS_DB_PORT:-5435}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${STUDENTS_DB_USER:-student} -d ${STUDENTS_DB_NAME:-students_db}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  airflow-db-volume:
+  students-db-volume:
